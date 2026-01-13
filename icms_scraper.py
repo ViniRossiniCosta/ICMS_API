@@ -11,9 +11,14 @@ class ICMS_Scraper:
         'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI', 'RN', 'RS', 
         'RJ', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO']
     
+    # Fontes de dados
+    FONTES = {
+        'conta_azul': 'https://contaazul.com/blog/tabela-de-aliquota-interestadual/',
+        'svrs': 'https://dfe-portal.svrs.rs.gov.br/Difal/aliquotas'
+    }
+    
     def __init__(self):
         chrome_options = Options()
-
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
@@ -21,256 +26,419 @@ class ICMS_Scraper:
         chrome_options.add_argument("--window-size=1920,1080")
 
         self.driver = webdriver.Chrome(options=chrome_options)
-        self.url = "https://www.taxgroup.com.br/intelligence/tabela-icms-2026-fique-por-dentro-das-aliquotas-estaduais-atualizadas/"
-        self.matriz_completa = {}
+        self.matriz_icms = {}
+        self.aliquotas_internas = {}
+        self.aliquotas_internas_fontes = {}  # Para comparar entre fontes
+        self.fonte_utilizada = []
 
-    def scrape(self):
-        print('Iniciando o scraping das aliquotas de ICMS...')
-
+    def scrape_conta_azul(self):
+        """Extrai dados da Conta Azul"""
+        print('\n📊 Tentando extrair de Conta Azul...')
+        
         try:
-            self.driver.get(self.url)
+            self.driver.get(self.FONTES['conta_azul'])
             time.sleep(5)
 
-            # Mapeia sigla do estado para nome completo (usado nos títulos)
-            estado_sigla_map = {
-                'AC': 'Acre', 'AL': 'Alagoas', 'AM': 'Amazonas', 'AP': 'Amapá',
-                'BA': 'Bahia', 'CE': 'Ceará', 'DF': 'Distrito Federal', 'ES': 'Espírito Santo',
-                'GO': 'Goiás', 'MA': 'Maranhão', 'MT': 'Mato Grosso', 'MS': 'Mato Grosso do Sul',
-                'MG': 'Minas Gerais', 'PA': 'Pará', 'PB': 'Paraíba', 'PR': 'Paraná',
-                'PE': 'Pernambuco', 'PI': 'Piauí', 'RN': 'Rio Grande do Norte',
-                'RS': 'Rio Grande do Sul', 'RJ': 'Rio de Janeiro', 'RO': 'Rondônia',
-                'RR': 'Roraima', 'SC': 'Santa Catarina', 'SP': 'São Paulo',
-                'SE': 'Sergipe', 'TO': 'Tocantins'
-            }
-
-            # Encontra todos os h2 com nomes de estados
-            headings = self.driver.find_elements(By.TAG_NAME, 'h2')
+            # Encontra a tabela principal
+            tabela = self.driver.find_element(By.TAG_NAME, 'table')
             
-            processed_states = set()
+            # Extrai todas as linhas da tabela
+            all_rows = tabela.find_elements(By.TAG_NAME, 'tr')
             
-            for heading in headings:
-                heading_text = heading.text.strip()
+            if len(all_rows) == 0:
+                raise Exception("Nenhuma linha encontrada na tabela")
+            
+            # Primeira linha é o cabeçalho
+            header_row = all_rows[0]
+            header_cells = header_row.find_elements(By.TAG_NAME, 'td')
+            
+            # Se não houver td, tenta th
+            if len(header_cells) == 0:
+                header_cells = header_row.find_elements(By.TAG_NAME, 'th')
+            
+            # Lista de UFs no cabeçalho (pula primeira célula vazia)
+            ufs_destino = [cell.text.strip() for cell in header_cells[1:]]
+            print(f"  Estados de destino encontrados: {len(ufs_destino)}")
+            
+            # Linhas de dados (pula a primeira que é o cabeçalho)
+            rows = all_rows[1:]
+            
+            print(f"  Linhas de dados encontradas: {len(rows)}")
+            
+            matriz_temp = {}
+            aliquotas_internas_temp = {}
+            
+            for row in rows:
+                cells = row.find_elements(By.TAG_NAME, 'td')
                 
-                # Procura por padrão "Tabela ICMS XXXX – Estado" ou "Tabela ICMS XXXX- Estado"
-                if 'Tabela ICMS' in heading_text and ('–' in heading_text or '- ' in heading_text):
-                    # Separa por hífen (com ou sem espaço)
-                    if '–' in heading_text:
-                        estado_nome = heading_text.split('–')[-1].strip()
-                    else:
-                        estado_nome = heading_text.split('- ')[-1].strip()
+                if len(cells) < 2:
+                    continue
+                
+                # Primeira célula é o estado de origem
+                uf_origem = cells[0].text.strip()
+                
+                if uf_origem not in self.UFs:
+                    continue
+                
+                # Inicializa o dicionário para este estado de origem
+                matriz_temp[uf_origem] = {}
+                
+                # Processa cada célula (alíquota para cada destino)
+                for i, cell in enumerate(cells[1:], start=0):
+                    if i >= len(ufs_destino):
+                        break
                     
-                    # Encontra a sigla correspondente com busca de correspondência mais longa
-                    estado_sigla = None
-                    maior_comprimento = 0
+                    uf_destino = ufs_destino[i]
+                    aliquota_text = cell.text.strip()
                     
-                    for sigla, nome in estado_sigla_map.items():
-                        if nome.lower() in estado_nome.lower():
-                            # Se a correspondência é mais longa, atualiza
-                            if len(nome) > maior_comprimento:
-                                estado_sigla = sigla
-                                maior_comprimento = len(nome)
-                    
-                    if not estado_sigla:
-                        print(f"⚠ Estado não identificado: {estado_nome}")
-                        continue
-                    
-                    # Evita processar o mesmo estado duas vezes
-                    if estado_sigla in processed_states:
-                        continue
-                    processed_states.add(estado_sigla)
-                    
-                    # Encontra a tabela imediatamente após este heading
+                    # Tenta converter para número
                     try:
-                        # Encontra a próxima tabela após o heading atual
-                        tabela = heading.find_element(By.XPATH, "./following::table[1]")
+                        # Remove % e converte vírgula para ponto
+                        aliquota_limpa = aliquota_text.replace('%', '').replace(',', '.').strip()
+                        aliquota_num = float(aliquota_limpa)
                         
-                        self.matriz_completa[estado_sigla] = {
-                            'nome': estado_nome,
-                            'aliquotas': {}
-                        }
+                        # Armazena alíquota interna (origem = destino)
+                        if uf_origem == uf_destino:
+                            aliquotas_internas_temp[uf_origem] = aliquota_num
                         
-                        pagina_atual = 1
-                        while True:
-                            try:
-                                tbody = tabela.find_element(By.TAG_NAME, 'tbody')
-                                rows = tbody.find_elements(By.TAG_NAME, 'tr')
-                                
-                                # Extrai dados da página atual
-                                for row in rows:
-                                    cells = row.find_elements(By.TAG_NAME, 'td')
-                                    if len(cells) >= 2:
-                                        aliquota_str = cells[0].text.strip()
-                                        descricao = cells[-1].text.strip()
-                                        
-                                        # Pula linhas vazias
-                                        if not aliquota_str or not descricao:
-                                            continue
-                                        
-                                        try:
-                                            aliquota_num = float(aliquota_str.replace('%', '').replace(',', '.').strip())
-                                        except ValueError:
-                                            aliquota_num = aliquota_str
-                                        
-                                        # Armazena por descrição para referência (evita duplicatas)
-                                        if descricao not in self.matriz_completa[estado_sigla]['aliquotas']:
-                                            self.matriz_completa[estado_sigla]['aliquotas'][descricao] = aliquota_num
-                                
-                                # Procura pelo botão de próxima página
-                                proximo_encontrado = False
-                                try:
-                                    # Tenta encontrar o botão Next de múltiplas formas
-                                    next_links = self.driver.find_elements(By.XPATH, 
-                                        "//a[contains(text(), 'Next') or contains(text(), 'next') or " +
-                                        "contains(@class, 'next') or contains(@aria-label, 'Next')]")
-                                    
-                                    for next_link in next_links:
-                                        try:
-                                            classes = next_link.get_attribute('class') or ''
-                                            if 'disabled' not in classes and next_link.is_enabled():
-                                                self.driver.execute_script("arguments[0].scrollIntoView(true);", next_link)
-                                                time.sleep(0.5)
-                                                self.driver.execute_script("arguments[0].click();", next_link)
-                                                proximo_encontrado = True
-                                                time.sleep(2)
-                                                pagina_atual += 1
-                                                break
-                                        except:
-                                            continue
-                                except:
-                                    pass
-                                
-                                if not proximo_encontrado:
-                                    # Tenta buscar por links numéricos de página
-                                    try:
-                                        all_links = self.driver.find_elements(By.XPATH, "//a")
-                                        for link in all_links:
-                                            try:
-                                                text = link.text.strip()
-                                                if text.isdigit():
-                                                    num = int(text)
-                                                    if num == pagina_atual + 1:
-                                                        classes = link.get_attribute('class') or ''
-                                                        if 'disabled' not in classes and link.is_enabled():
-                                                            self.driver.execute_script("arguments[0].scrollIntoView(true);", link)
-                                                            time.sleep(0.5)
-                                                            self.driver.execute_script("arguments[0].click();", link)
-                                                            proximo_encontrado = True
-                                                            time.sleep(2)
-                                                            pagina_atual += 1
-                                                            break
-                                            except:
-                                                continue
-                                    except:
-                                        pass
-                                
-                                if not proximo_encontrado:
-                                    break
-                            
-                            except Exception as e:
-                                print(f"⚠ Erro ao processar página {pagina_atual} de {estado_sigla}: {str(e)}")
-                                break
-                        
-                        print(f"✓ {estado_sigla} ({estado_nome}): {len(self.matriz_completa[estado_sigla]['aliquotas'])} produtos em {pagina_atual} página(s)")
-                    
-                    except Exception as e:
-                        print(f"⚠ Erro ao processar {estado_sigla}: {str(e)}")
-                        continue
+                        matriz_temp[uf_origem][uf_destino] = aliquota_num
+                    except ValueError:
+                        # Se não conseguir converter, mantém como texto
+                        matriz_temp[uf_origem][uf_destino] = aliquota_text
+                
+                print(f"  ✓ {uf_origem}: {len(matriz_temp[uf_origem])} alíquotas extraídas")
 
-            self.validar_extracao()
-
-            return self.matriz_completa
+            self.fonte_utilizada.append('conta_azul')
+            self.aliquotas_internas_fontes['conta_azul'] = aliquotas_internas_temp
+            
+            return matriz_temp, aliquotas_internas_temp
         
         except Exception as e:
-            print(f"\n✗ ERRO durante extração: {str(e)}")
-            import traceback            
-            traceback.print_exc()
+            print(f"  ✗ Erro ao extrair de Conta Azul: {str(e)}")
+            return None, None
+
+    def scrape_svrs(self):
+        """Extrai dados do portal SVRS"""
+        print('\n📊 Tentando extrair de SVRS (Portal DIFAL)...')
+        
+        try:
+            self.driver.get(self.FONTES['svrs'])
+            time.sleep(5)
+
+            # Tenta encontrar a tabela (pode ter estrutura diferente)
+            tabelas = self.driver.find_elements(By.TAG_NAME, 'table')
+            
+            if len(tabelas) == 0:
+                raise Exception("Nenhuma tabela encontrada")
+            
+            # Usa a primeira tabela encontrada
+            tabela = tabelas[0]
+            
+            # Extrai todas as linhas
+            all_rows = tabela.find_elements(By.TAG_NAME, 'tr')
+            
+            if len(all_rows) == 0:
+                raise Exception("Nenhuma linha encontrada na tabela")
+            
+            # Processa de forma similar
+            header_row = all_rows[0]
+            header_cells = header_row.find_elements(By.TAG_NAME, 'td')
+            
+            if len(header_cells) == 0:
+                header_cells = header_row.find_elements(By.TAG_NAME, 'th')
+            
+            ufs_destino = [cell.text.strip() for cell in header_cells[1:]]
+            print(f"  Estados de destino encontrados: {len(ufs_destino)}")
+            
+            rows = all_rows[1:]
+            print(f"  Linhas de dados encontradas: {len(rows)}")
+            
+            matriz_temp = {}
+            aliquotas_internas_temp = {}
+            
+            for row in rows:
+                cells = row.find_elements(By.TAG_NAME, 'td')
+                
+                if len(cells) < 2:
+                    continue
+                
+                uf_origem = cells[0].text.strip()
+                
+                if uf_origem not in self.UFs:
+                    continue
+                
+                matriz_temp[uf_origem] = {}
+                
+                for i, cell in enumerate(cells[1:], start=0):
+                    if i >= len(ufs_destino):
+                        break
+                    
+                    uf_destino = ufs_destino[i]
+                    aliquota_text = cell.text.strip()
+                    
+                    try:
+                        aliquota_limpa = aliquota_text.replace('%', '').replace(',', '.').strip()
+                        aliquota_num = float(aliquota_limpa)
+                        
+                        if uf_origem == uf_destino:
+                            aliquotas_internas_temp[uf_origem] = aliquota_num
+                        
+                        matriz_temp[uf_origem][uf_destino] = aliquota_num
+                    except ValueError:
+                        matriz_temp[uf_origem][uf_destino] = aliquota_text
+                
+                print(f"  ✓ {uf_origem}: {len(matriz_temp[uf_origem])} alíquotas extraídas")
+
+            self.fonte_utilizada.append('svrs')
+            self.aliquotas_internas_fontes['svrs'] = aliquotas_internas_temp
+            
+            return matriz_temp, aliquotas_internas_temp
+        
+        except Exception as e:
+            print(f"  ✗ Erro ao extrair de SVRS: {str(e)}")
+            return None, None
+
+    def comparar_aliquotas_internas(self):
+        """Compara alíquotas internas de diferentes fontes e escolhe a mais recente/correta"""
+        print('\n🔍 Comparando alíquotas internas entre fontes...')
+        
+        if len(self.aliquotas_internas_fontes) < 2:
+            print('  ⚠ Apenas uma fonte disponível, não há comparação')
+            return
+        
+        # Prioridade: SVRS > Conta Azul (SVRS é fonte oficial)
+        fonte_prioritaria = 'svrs' if 'svrs' in self.aliquotas_internas_fontes else 'conta_azul'
+        
+        print(f'  📌 Fonte prioritária: {fonte_prioritaria.upper()}')
+        
+        diferencas = []
+        
+        for uf in self.UFs:
+            valores = {}
+            for fonte, aliquotas in self.aliquotas_internas_fontes.items():
+                if uf in aliquotas:
+                    valores[fonte] = aliquotas[uf]
+            
+            if len(valores) > 1:
+                valores_unicos = set(valores.values())
+                if len(valores_unicos) > 1:
+                    diferencas.append({
+                        'uf': uf,
+                        'valores': valores,
+                        'escolhido': valores.get(fonte_prioritaria, list(valores.values())[0])
+                    })
+                    print(f'  ⚠ {uf}: Diferença encontrada - {valores}')
+                    print(f'    → Usando: {valores.get(fonte_prioritaria, list(valores.values())[0])}%')
+            
+            # Define a alíquota interna usando a fonte prioritária
+            if fonte_prioritaria in valores:
+                self.aliquotas_internas[uf] = valores[fonte_prioritaria]
+            elif len(valores) > 0:
+                self.aliquotas_internas[uf] = list(valores.values())[0]
+        
+        if len(diferencas) == 0:
+            print('  ✓ Todas as alíquotas coincidem entre as fontes')
+        else:
+            print(f'  📊 Total de diferenças encontradas: {len(diferencas)}')
+
+    def scrape(self):
+        """Tenta extrair dados de múltiplas fontes com redundância"""
+        print('='*70)
+        print('🚀 Iniciando scraping de alíquotas ICMS interestadual')
+        print('='*70)
+        
+        # Tenta Conta Azul primeiro
+        matriz_ca, aliq_int_ca = self.scrape_conta_azul()
+        
+        # Tenta SVRS como backup/complemento
+        matriz_svrs, aliq_int_svrs = self.scrape_svrs()
+        
+        # Escolhe a melhor fonte
+        if matriz_ca and len(matriz_ca) > 0:
+            self.matriz_icms = matriz_ca
+            print('\n✓ Usando dados da Conta Azul como base principal')
+        elif matriz_svrs and len(matriz_svrs) > 0:
+            self.matriz_icms = matriz_svrs
+            print('\n✓ Usando dados do SVRS como base principal')
+        else:
+            print('\n✗ Falha ao extrair dados de todas as fontes')
             return None
+        
+        # Compara e consolida alíquotas internas
+        self.comparar_aliquotas_internas()
+        
+        # Validação final
+        self.validar_extracao()
+        
+        return self.matriz_icms
 
     def validar_extracao(self):
-        estados_faltantes = [uf for uf in self.UFs if uf not in self.matriz_completa]
+        """Valida a extração dos dados"""
+        print('\n📋 Validando extração...')
+        
+        estados_faltantes = [uf for uf in self.UFs if uf not in self.matriz_icms]
 
         if estados_faltantes:
-            print(f" ⚠ ATENÇÃO: Estados faltantes: {estados_faltantes}")
+            print(f"  ⚠ Estados faltantes: {estados_faltantes}")
         else:
-            print(" ✓ Extração validada com sucesso. Todos os estados presentes.")
+            print("  ✓ Todos os 27 estados presentes")
 
-        for estado in self.matriz_completa:
-            destinos = len(self.matriz_completa[estado])
+        # Valida se cada estado tem alíquotas para todos os destinos
+        for estado in self.matriz_icms:
+            destinos = len(self.matriz_icms[estado])
             
             if destinos < 27:
-                print(f"   ⚠ {estado}: apenas {destinos}/27 destinos")
+                print(f"  ⚠ {estado}: apenas {destinos}/27 destinos")
+            else:
+                print(f"  ✓ {estado}: completo ({destinos}/27)")
 
-    def salvar_json(self, nome_arquivo='icms_aliquotas.json'):
-        if not self.matriz_completa:
+    def salvar_json(self, nome_arquivo='icms_interestadual.json'):
+        """Salva os dados em JSON"""
+        if not self.matriz_icms:
             print("Nenhum dado para salvar.")
             return
         
+        dados_completos = {
+            'matriz_interestadual': self.matriz_icms,
+            'aliquotas_internas': self.aliquotas_internas,
+            'aliquotas_internas_por_fonte': self.aliquotas_internas_fontes,
+            'metadata': {
+                'fontes_consultadas': list(self.FONTES.keys()),
+                'fontes_utilizadas': self.fonte_utilizada,
+                'data_extracao': time.strftime('%Y-%m-%d %H:%M:%S'),
+                'total_estados': len(self.matriz_icms)
+            }
+        }
+        
         with open(nome_arquivo, 'w', encoding='utf-8') as f:
-            json.dump(self.matriz_completa, f, ensure_ascii=False, indent=4)
-            
+            json.dump(dados_completos, f, ensure_ascii=False, indent=4)
+        
+        print(f"\n✓ Dados salvos em '{nome_arquivo}'")
         return nome_arquivo
     
-    def consultar_aliquota(self, estado, produto):
-        if not self.matriz_completa:
+    def consultar_aliquota(self, uf_origem, uf_destino):
+        """Consulta a alíquota interestadual entre dois estados"""
+        if not self.matriz_icms:
             print("Nenhum dado disponível. Execute o método scrape() primeiro.")
             return None
         
-        estado = estado.upper()
-        produto = produto.lower()
+        uf_origem = uf_origem.upper()
+        uf_destino = uf_destino.upper()
 
-        if estado not in self.matriz_completa:
-            print(f"✗ Estado '{estado}' não encontrado")
+        if uf_origem not in self.matriz_icms:
+            print(f"✗ Estado de origem '{uf_origem}' não encontrado")
             return None
         
-        estado_data = self.matriz_completa[estado]
+        if uf_destino not in self.matriz_icms[uf_origem]:
+            print(f"✗ Estado de destino '{uf_destino}' não encontrado para origem {uf_origem}")
+            return None
         
-        # Busca por produto exato ou parcial
-        for descricao, aliquota in estado_data['aliquotas'].items():
-            if produto in descricao.lower():
-                return {
-                    'estado': estado,
-                    'nome_estado': estado_data['nome'],
-                    'produto': descricao,
-                    'aliquota': aliquota
-                }
+        aliquota = self.matriz_icms[uf_origem][uf_destino]
         
-        print(f"✗ Produto '{produto}' não encontrado para {estado}")
-        return None
+        return {
+            'origem': uf_origem,
+            'destino': uf_destino,
+            'aliquota': aliquota,
+            'tipo': 'interna' if uf_origem == uf_destino else 'interestadual'
+        }
+    
+    def calcular_icms(self, uf_origem, uf_destino, valor_operacao):
+        """Calcula o valor do ICMS para uma operação"""
+        resultado = self.consultar_aliquota(uf_origem, uf_destino)
+        
+        if not resultado:
+            return None
+        
+        aliquota = resultado['aliquota']
+        
+        if isinstance(aliquota, (int, float)):
+            valor_icms = valor_operacao * (aliquota / 100)
+            
+            return {
+                'origem': uf_origem,
+                'destino': uf_destino,
+                'valor_operacao': valor_operacao,
+                'aliquota_percentual': aliquota,
+                'valor_icms': round(valor_icms, 2),
+                'tipo': resultado['tipo']
+            }
+        else:
+            print(f"✗ Não foi possível calcular. Alíquota não numérica: {aliquota}")
+            return None
+    
+    def calcular_difal(self, uf_origem, uf_destino, valor_operacao):
+        """Calcula o Diferencial de Alíquota (DIFAL)"""
+        if uf_origem == uf_destino:
+            print("⚠ DIFAL não se aplica para operações dentro do mesmo estado")
+            return None
+        
+        # Alíquota interestadual (origem -> destino)
+        aliquota_interestadual = self.matriz_icms.get(uf_origem, {}).get(uf_destino)
+        
+        # Alíquota interna do estado de destino
+        aliquota_interna_destino = self.aliquotas_internas.get(uf_destino)
+        
+        if not aliquota_interestadual or not aliquota_interna_destino:
+            print("✗ Não foi possível calcular DIFAL. Dados incompletos.")
+            return None
+        
+        # Diferencial de alíquota
+        diferencial = aliquota_interna_destino - aliquota_interestadual
+        valor_difal = valor_operacao * (diferencial / 100)
+        
+        return {
+            'origem': uf_origem,
+            'destino': uf_destino,
+            'valor_operacao': valor_operacao,
+            'aliquota_interestadual': aliquota_interestadual,
+            'aliquota_interna_destino': aliquota_interna_destino,
+            'diferencial_aliquota': diferencial,
+            'valor_difal': round(valor_difal, 2)
+        }
         
     def gerar_relatorio(self):
-        if not self.matriz_completa:
+        """Gera relatório estatístico das alíquotas"""
+        if not self.matriz_icms:
             print("Nenhum dado disponível para gerar relatório.")
             return
         
-        print("\n📊 Relatório de Alíquotas de ICMS por Estado:")
-        print("=" * 60)
-
-        todas_aliquotas = []
+        print("\n" + "="*70)
+        print("📊 RELATÓRIO DE ALÍQUOTAS ICMS INTERESTADUAL")
+        print("="*70)
         
-        for estado in sorted(self.matriz_completa.keys()):
-            estado_data = self.matriz_completa[estado]
-            aliquotas = [v for v in estado_data['aliquotas'].values() if isinstance(v, (int, float))]
+        # Informações sobre as fontes
+        print(f"\n🔗 Fontes utilizadas: {', '.join(self.fonte_utilizada)}")
+        
+        # Alíquotas internas por estado
+        print("\n🏛️  ALÍQUOTAS INTERNAS (por estado):")
+        print("-" * 70)
+        for uf in sorted(self.aliquotas_internas.keys()):
+            print(f"  {uf}: {self.aliquotas_internas[uf]}%")
+        
+        # Estatísticas de alíquotas interestaduais
+        todas_aliquotas_inter = []
+        for origem in self.matriz_icms:
+            for destino, aliquota in self.matriz_icms[origem].items():
+                if origem != destino and isinstance(aliquota, (int, float)):
+                    todas_aliquotas_inter.append(aliquota)
+        
+        if todas_aliquotas_inter:
+            print("\n📈 ESTATÍSTICAS GERAIS (Operações Interestaduais):")
+            print("-" * 70)
+            print(f"  Total de alíquotas interestaduais: {len(todas_aliquotas_inter)}")
+            print(f"  Alíquota mínima: {min(todas_aliquotas_inter)}%")
+            print(f"  Alíquota máxima: {max(todas_aliquotas_inter)}%")
+            print(f"  Alíquota média: {sum(todas_aliquotas_inter) / len(todas_aliquotas_inter):.2f}%")
             
-            if aliquotas:
-                media = sum(aliquotas) / len(aliquotas)
-                minimo = min(aliquotas)
-                maximo = max(aliquotas)
-                
-                print(f"\n{estado} ({estado_data['nome']}):")
-                print(f"  Produtos cadastrados: {len(aliquotas)}")
-                print(f"  Média das alíquotas: {media:.2f}%")
-                print(f"  Alíquota mínima: {minimo:.2f}%")
-                print(f"  Alíquota máxima: {maximo:.2f}%")
-                
-                todas_aliquotas.extend(aliquotas)
+            # Conta quantas vezes cada alíquota aparece
+            from collections import Counter
+            contador = Counter(todas_aliquotas_inter)
+            print(f"\n  Distribuição de alíquotas:")
+            for aliquota, qtd in sorted(contador.items()):
+                print(f"    {aliquota}%: {qtd} ocorrências")
         
-        if todas_aliquotas:
-            print("\n" + "=" * 60)
-            print("📈 RESUMO GERAL:")
-            print(f"  Total de alíquotas: {len(todas_aliquotas)}")
-            print(f"  Média nacional: {sum(todas_aliquotas) / len(todas_aliquotas):.2f}%")
-            print(f"  Alíquota mínima: {min(todas_aliquotas):.2f}%")
-            print(f"  Alíquota máxima: {max(todas_aliquotas):.2f}%")
+        print("\n" + "="*70)
     
     def fechar(self):
+        """Fecha o navegador"""
         self.driver.quit()
