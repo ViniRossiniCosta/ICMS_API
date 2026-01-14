@@ -5,6 +5,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 import json
 import time
+from datetime import datetime
 
 class ICMS_Scraper:
     UFs = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 
@@ -17,19 +18,27 @@ class ICMS_Scraper:
         'svrs': 'https://dfe-portal.svrs.rs.gov.br/Difal/aliquotas'
     }
     
-    def __init__(self):
+    def __init__(self, headless=True):
+        """
+        Inicializa o scraper
+        """
         chrome_options = Options()
+        
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--no-sandbox")
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+        chrome_options.add_experimental_option('useAutomationExtension', False)
 
         self.driver = webdriver.Chrome(options=chrome_options)
         self.matriz_icms = {}
         self.aliquotas_internas = {}
-        self.aliquotas_internas_fontes = {}  # Para comparar entre fontes
+        self.aliquotas_internas_fontes = {}
         self.fonte_utilizada = []
+        self.erros = []
 
     def scrape_conta_azul(self):
         """Extrai dados da Conta Azul"""
@@ -114,7 +123,9 @@ class ICMS_Scraper:
             return matriz_temp, aliquotas_internas_temp
         
         except Exception as e:
-            print(f"  ✗ Erro ao extrair de Conta Azul: {str(e)}")
+            erro_msg = f"Erro ao extrair de Conta Azul: {str(e)}"
+            print(f"  ✗ {erro_msg}")
+            self.erros.append(erro_msg)
             return None, None
 
     def scrape_svrs(self):
@@ -195,7 +206,9 @@ class ICMS_Scraper:
             return matriz_temp, aliquotas_internas_temp
         
         except Exception as e:
-            print(f"  ✗ Erro ao extrair de SVRS: {str(e)}")
+            erro_msg = f"Erro ao extrair de SVRS: {str(e)}"
+            print(f"  ✗ {erro_msg}")
+            self.erros.append(erro_msg)
             return None, None
 
     def comparar_aliquotas_internas(self):
@@ -280,6 +293,7 @@ class ICMS_Scraper:
 
         if estados_faltantes:
             print(f"  ⚠ Estados faltantes: {estados_faltantes}")
+            self.erros.append(f"Estados faltantes: {', '.join(estados_faltantes)}")
         else:
             print("  ✓ Todos os 27 estados presentes")
 
@@ -288,7 +302,9 @@ class ICMS_Scraper:
             destinos = len(self.matriz_icms[estado])
             
             if destinos < 27:
-                print(f"  ⚠ {estado}: apenas {destinos}/27 destinos")
+                msg = f"{estado}: apenas {destinos}/27 destinos"
+                print(f"  ⚠ {msg}")
+                self.erros.append(msg)
             else:
                 print(f"  ✓ {estado}: completo ({destinos}/27)")
 
@@ -296,7 +312,7 @@ class ICMS_Scraper:
         """Salva os dados em JSON"""
         if not self.matriz_icms:
             print("Nenhum dado para salvar.")
-            return
+            return None
         
         dados_completos = {
             'matriz_interestadual': self.matriz_icms,
@@ -305,8 +321,10 @@ class ICMS_Scraper:
             'metadata': {
                 'fontes_consultadas': list(self.FONTES.keys()),
                 'fontes_utilizadas': self.fonte_utilizada,
-                'data_extracao': time.strftime('%Y-%m-%d %H:%M:%S'),
-                'total_estados': len(self.matriz_icms)
+                'data_extracao': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'total_estados': len(self.matriz_icms),
+                'total_aliquotas': sum(len(destinos) for destinos in self.matriz_icms.values()),
+                'erros': self.erros if self.erros else []
             }
         }
         
@@ -315,6 +333,22 @@ class ICMS_Scraper:
         
         print(f"\n✓ Dados salvos em '{nome_arquivo}'")
         return nome_arquivo
+    
+    def get_dados_completos(self):
+        """Retorna os dados completos como dicionário (útil para integração direta)"""
+        return {
+            'matriz_interestadual': self.matriz_icms,
+            'aliquotas_internas': self.aliquotas_internas,
+            'aliquotas_internas_por_fonte': self.aliquotas_internas_fontes,
+            'metadata': {
+                'fontes_consultadas': list(self.FONTES.keys()),
+                'fontes_utilizadas': self.fonte_utilizada,
+                'data_extracao': datetime.now().isoformat(),
+                'total_estados': len(self.matriz_icms),
+                'total_aliquotas': sum(len(destinos) for destinos in self.matriz_icms.values()),
+                'erros': self.erros if self.erros else []
+            }
+        }
     
     def consultar_aliquota(self, uf_origem, uf_destino):
         """Consulta a alíquota interestadual entre dois estados"""
@@ -437,8 +471,19 @@ class ICMS_Scraper:
             for aliquota, qtd in sorted(contador.items()):
                 print(f"    {aliquota}%: {qtd} ocorrências")
         
+        # Mostra erros se houver
+        if self.erros:
+            print("\n⚠️  AVISOS E ERROS:")
+            print("-" * 70)
+            for erro in self.erros:
+                print(f"  • {erro}")
+        
         print("\n" + "="*70)
     
     def fechar(self):
         """Fecha o navegador"""
-        self.driver.quit()
+        try:
+            self.driver.quit()
+            print("🔒 Navegador fechado")
+        except:
+            pass
