@@ -54,24 +54,16 @@ class SupabaseDB:
         return registros_inseridos, erros
     
     def inserir_aliquotas_interestaduais(self, matriz_dict, fonte='conta_azul'):
-        """Insere ou atualiza alíquotas interestaduais em lote"""
+        """Insere ou atualiza alíquotas interestaduais em lote usando UPSERT"""
         registros_inseridos = 0
+        registros_atualizados = 0
         erros = []
         
         # Conta total de registros
         total_registros = sum(len(destinos) for destinos in matriz_dict.values())
-        print(f"\n📝 Inserindo {total_registros} alíquotas interestaduais...")
+        print(f"\n📝 Processando {total_registros} alíquotas interestaduais...")
         
-        # Desativa todos os registros antigos
-        try:
-            result = self.client.table('aliquotas_interestaduais').update({
-                'ativo': False
-            }).eq('ativo', True).execute()
-            print(f"  ↳ Desativados registros antigos: {len(result.data) if result.data else 0}")
-        except Exception as e:
-            print(f"  ⚠️ Aviso ao desativar registros: {e}")
-        
-        # Prepara lista de registros para inserção em lote (SEM data_extracao)
+        # Prepara lista de registros
         registros = []
         for uf_origem, destinos in matriz_dict.items():
             for uf_destino, aliquota in destinos.items():
@@ -83,10 +75,10 @@ class SupabaseDB:
                     'ativo': True
                 })
         
-        print(f"  📦 Preparados {len(registros)} registros para inserção")
+        print(f"  📦 Preparados {len(registros)} registros para UPSERT")
         
-        # Insere em lotes de 100 registros
-        batch_size = 100
+        # Processa em lotes de 50 registros (reduzido para melhor controle)
+        batch_size = 50
         total_batches = (len(registros) + batch_size - 1) // batch_size
         
         for i in range(0, len(registros), batch_size):
@@ -94,12 +86,18 @@ class SupabaseDB:
             batch_num = i // batch_size + 1
             
             try:
-                print(f"  📤 Inserindo lote {batch_num}/{total_batches} ({len(batch)} registros)...")
-                result = self.client.table('aliquotas_interestaduais').insert(batch).execute()
+                print(f"  📤 Processando lote {batch_num}/{total_batches} ({len(batch)} registros)...")
+                
+                # Tenta UPSERT (atualiza se existe, insere se não existe)
+                result = self.client.table('aliquotas_interestaduais').upsert(
+                    batch,
+                    on_conflict='uf_origem,uf_destino'  # Coluna(s) da constraint única
+                ).execute()
                 
                 if result.data:
-                    registros_inseridos += len(batch)
-                    print(f"    ✅ Lote {batch_num} inserido com sucesso")
+                    num_records = len(result.data)
+                    registros_inseridos += num_records
+                    print(f"    ✅ Lote {batch_num} processado: {num_records} registros")
                 else:
                     print(f"    ⚠️ Lote {batch_num} não retornou dados")
                     
@@ -108,9 +106,9 @@ class SupabaseDB:
                 erros.append(erro_msg)
                 print(f"    ❌ {erro_msg}")
         
-        print(f"\n✅ Total inserido: {registros_inseridos}/{len(registros)}")
+        print(f"\n✅ Total processado: {registros_inseridos}/{len(registros)}")
         return registros_inseridos, erros
-    
+        
     def importar_json(self, json_path):
         """Importa dados do JSON gerado pelo scraper"""
         print(f"\n{'='*70}")
