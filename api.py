@@ -19,16 +19,45 @@ def index():
         "descricao": "API para consulta e cálculo de alíquotas ICMS interestaduais",
         "endpoints": {
             "/": "GET - Informações da API",
+            "/health": "GET - Status da API e conexão",
             "/aliquota": "GET - Consulta alíquota (params: origem, destino)",
             "/calcular-icms": "POST - Calcula valor do ICMS",
             "/calcular-difal": "POST - Calcula DIFAL",
             "/aliquotas-internas": "GET - Lista todas alíquotas internas",
             "/matriz-completa": "GET - Retorna matriz completa",
-            "/atualizar": "POST - Executa scraping e atualiza dados",
-            "/importar-json": "POST - Importa dados de um JSON",
-            "/historico": "GET - Histórico de atualizações"
+            "/estados": "GET - Lista todos os estados",
+            "/atualizar": "POST - Executa scraping e atualiza dados"
         }
     })
+
+@app.route("/health", methods=['GET'])
+def health():
+    """Endpoint de health check"""
+    try:
+        conectado, mensagem = db.verificar_conexao()
+        
+        if conectado:
+            return jsonify({
+                "status": "ok",
+                "database": "conectado",
+                "mensagem": mensagem,
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({
+                "status": "erro",
+                "database": "desconectado",
+                "erro": mensagem,
+                "timestamp": datetime.now().isoformat()
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "status": "erro",
+            "database": "desconectado",
+            "erro": str(e),
+            "timestamp": datetime.now().isoformat()
+        }), 500
 
 @app.route("/aliquota", methods=['GET'])
 def consultar_aliquota():
@@ -53,7 +82,6 @@ def consultar_aliquota():
         "destino": resultado['uf_destino'],
         "aliquota": float(resultado['aliquota']),
         "fonte": resultado['fonte'],
-        "data_extracao": resultado['data_extracao'],
         "tipo": "interna" if origem == destino else "interestadual"
     })
 
@@ -166,6 +194,16 @@ def matriz_completa():
         "total_estados": len(matriz)
     })
 
+@app.route("/estados", methods=['GET'])
+def listar_estados():
+    """Lista todos os estados"""
+    estados = db.listar_estados()
+    
+    return jsonify({
+        "estados": estados,
+        "total": len(estados)
+    })
+
 @app.route("/atualizar", methods=['POST'])
 def atualizar_dados():
     """Força atualização dos dados via scraping"""
@@ -208,63 +246,6 @@ def atualizar_dados():
             "erro": f"Falha ao atualizar: {str(e)}"
         }), 500
 
-@app.route("/importar-json", methods=['POST'])
-def importar_json():
-    """Importa dados de um arquivo JSON"""
-    dados = request.get_json()
-    json_path = dados.get('json_path', 'icms_interestadual.json')
-    
-    if not os.path.exists(json_path):
-        return jsonify({
-            "erro": f"Arquivo não encontrado: {json_path}"
-        }), 404
-    
-    resultado = db.importar_json(json_path)
-    
-    if resultado['sucesso']:
-        return jsonify({
-            "mensagem": "Dados importados com sucesso",
-            "total_registros": resultado['total_registros'],
-            "total_internas": resultado['total_internas'],
-            "total_interestaduais": resultado['total_interestaduais']
-        })
-    else:
-        return jsonify({
-            "erro": "Falha ao importar dados",
-            "detalhes": resultado.get('erro')
-        }), 500
-
-@app.route("/historico", methods=['GET'])
-def historico():
-    """Retorna histórico de atualizações"""
-    limit = request.args.get('limit', 10, type=int)
-    
-    historico_list = db.obter_historico(limit)
-    
-    return jsonify({
-        "historico": historico_list,
-        "total": len(historico_list)
-    })
-
-@app.route("/health", methods=['GET'])
-def health():
-    """Endpoint de health check"""
-    try:
-        # Testa conexão com Supabase
-        db.client.table('estados').select('uf').limit(1).execute()
-        
-        return jsonify({
-            "status": "ok",
-            "database": "conectado",
-            "timestamp": datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "erro",
-            "database": "desconectado",
-            "erro": str(e),
-            "timestamp": datetime.now().isoformat()
-        }), 500
 
 if __name__ == '__main__':
     try:
