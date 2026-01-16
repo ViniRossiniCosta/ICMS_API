@@ -8,7 +8,7 @@ class Config:
     SUPABASE_KEY = os.getenv('SUPABASE_KEY')
     FLASK_ENV = os.getenv('FLASK_ENV', 'development')
     FLASK_PORT = int(os.getenv('FLASK_PORT', 5004))
-    
+
     @staticmethod
     def validate():
         """Valida se as configurações necessárias estão presentes"""

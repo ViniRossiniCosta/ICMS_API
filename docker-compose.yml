@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  icms-api:
+    build: 
+      context: .
+      dockerfile: dockerfile
+    container_name: icms-api
+    ports:
+      - "5004:5004"
+    environment:
+      - FLASK_PORT=5004
+      - SUPABASE_URL=${SUPABASE_URL:-https://cbhaiuvfyruywmpysxyz.supabase.co}
+      - SUPABASE_KEY=${SUPABASE_KEY:-sb_publishable_UkNu0VLTCm06uDfJmGiYvg_xW579LAw}
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Sao_Paulo
+    env_file:
+       .env
+    volumes:
+      # Volume para desenvolvimento (remova em produção)
+      - .:/app
+      # Volume para logs
+      - ./logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - icms-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  icms-network:
+    driver: bridge

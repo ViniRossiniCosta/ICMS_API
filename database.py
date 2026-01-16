@@ -6,6 +6,8 @@ import json
 class SupabaseDB:
     def __init__(self):
         Config.validate()
+        print("🔌 Conectando ao Supabase...")
+        print(f"  - SUPABASE_URL: {Config.SUPABASE_URL}")
         self.client: Client = create_client(Config.SUPABASE_URL, Config.SUPABASE_KEY)
         print("✅ Cliente Supabase inicializado")
     

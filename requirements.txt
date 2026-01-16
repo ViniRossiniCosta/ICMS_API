@@ -1,5 +1,18 @@
-flask==3.0.0
+# Web Framework
+Flask==3.0.0
 flask-cors==4.0.0
-supabase==2.3.0
-python-dotenv==1.0.0
+
+# Database
+supabase==2.18.0
+postgrest==1.1.1
+
+# Web Scraping
 selenium==4.16.0
+webdriver-manager==4.0.1
+
+# Utilities
+python-dotenv==1.0.0
+
+# WSGI Server (para produção)
+gunicorn==21.2.0
+waitress==2.1.2
